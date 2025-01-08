@@ -30,7 +30,8 @@ from cur_models import CURLinear
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-parser = argparse.ArgumentParser(description="Benchmarking CUR-Decomposed Models")
+parser = argparse.ArgumentParser(
+    description="Benchmarking CUR-Decomposed Models")
 
 parser.add_argument('--load_path', type=str, default=None,
                     help='Directory path from where the modified model is loaded.')

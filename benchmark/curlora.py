@@ -13,7 +13,7 @@ def compute_selection_probabilities(A):
 
 
 def select_indices_with_replacement(probs, k):
-    #inverted_P = 1 / (probs + 0.001)
+    # inverted_P = 1 / (probs + 0.001)
     inverted_P = (1 / (probs + 0.001)).float()
 
     # Normalize the inverted probabilities
@@ -26,8 +26,9 @@ def select_indices_with_replacement(probs, k):
 
 def adjust_duplicates(selected_indices, A, axis):
     unique_indices, counts = np.unique(selected_indices, return_counts=True)
-    adjusted_matrix = A[:, unique_indices] if axis == 1 else A[unique_indices, :]
-    
+    adjusted_matrix = A[:,
+                        unique_indices] if axis == 1 else A[unique_indices, :]
+
     for idx, count in enumerate(counts):
         if count > 1:
             scaling_factor = np.sqrt(count)
@@ -35,7 +36,7 @@ def adjust_duplicates(selected_indices, A, axis):
                 adjusted_matrix[:, idx] *= scaling_factor
             else:
                 adjusted_matrix[idx, :] *= scaling_factor
-    
+
     return adjusted_matrix, unique_indices
 
 
@@ -44,13 +45,13 @@ def cur_decomposition(A, c):
     column_probs, row_probs = compute_selection_probabilities(A)
     selected_columns = select_indices_with_replacement(column_probs, c)
     selected_rows = select_indices_with_replacement(row_probs, r)
-    
+
     C = A[:, selected_columns]
     R = A[selected_rows, :]
-    
+
     U = torch.empty(C.shape[1], R.shape[0])
     U = torch.zeros_like(U)
-    
+
     return C, U, R
 
 
@@ -81,9 +82,9 @@ class CURLoRALinear(nn.Module):
 
         # CURLoRA
         self.curlora_modules = CURLoRAModule(self.weight, self.rank)
-                
+
     def forward(self, x):
-        x_0 = x.matmul(self.weight.t()) 
+        x_0 = x.matmul(self.weight.t())
         x_adapted = self.curlora_modules(x)
         x = x_0 + (self.alpha * x_adapted)
         if self.bias is not None:

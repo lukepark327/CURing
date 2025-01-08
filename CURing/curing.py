@@ -448,8 +448,10 @@ if args.model_save:
 # Calculate differences in model size and Frobenius norms
 
 
-cur_model_size_bits_nonzero = calculate_model_size(modified_model, exclude_zeros=True)
-cur_model_size_bits_zero = calculate_model_size(modified_model, exclude_zeros=False)
+cur_model_size_bits_nonzero = calculate_model_size(
+    modified_model, exclude_zeros=True)
+cur_model_size_bits_zero = calculate_model_size(
+    modified_model, exclude_zeros=False)
 size_difference_bits_nonzero = original_model_size_bits_nonzero - \
     cur_model_size_bits_nonzero
 size_difference_bits_zero = original_model_size_bits_zero - cur_model_size_bits_zero

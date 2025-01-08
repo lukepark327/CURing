@@ -55,20 +55,17 @@ def select_rows_and_columns(A, activation_norm, num_rows, num_cols):
 
     activation_norm = activation_norm.view(1, -1)
 
-
     # ========================
 
     ########
     # TEST #
     ########
 
-
     # WANDA
     W_metric = A.abs() * activation_norm  # Hadamard multiplication
 
     # # Weight
     # W_metric = A.abs()
-
 
     # # Magnitude
     # # Sum over out_features
@@ -104,14 +101,13 @@ def select_rows_and_columns(A, activation_norm, num_rows, num_cols):
     # return
     return row_indices, col_indices
 
-
     # # RANDOM
     # m, n = A.shape
     # row_indices = torch.randperm(m)[:num_rows].tolist()
     # col_indices = torch.randperm(n)[:num_cols].tolist()
     # # return
     # return row_indices, col_indices
-    
+
     # ========================
 
 

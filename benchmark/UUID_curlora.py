@@ -317,11 +317,14 @@ def evaluate_accuracy(model, dataloader, task_name=None, eval_steps=num_validati
             )
 
             # Decode the texts
-            reference_texts = tokenizer.batch_decode(batch["output_eval_ids"], skip_special_tokens=True)
+            reference_texts = tokenizer.batch_decode(
+                batch["output_eval_ids"], skip_special_tokens=True)
             reference_len = len(reference_texts[0])
             prompt_len = prompt_inputs["input_ids"].shape[1]
-            generated_texts = tokenizer.batch_decode(output_ids[:, prompt_len:], skip_special_tokens=True)
-            generated_texts = [(gt.strip())[:reference_len] for gt in generated_texts]
+            generated_texts = tokenizer.batch_decode(
+                output_ids[:, prompt_len:], skip_special_tokens=True)
+            generated_texts = [(gt.strip())[:reference_len]
+                               for gt in generated_texts]
 
             # Calculate character-level accuracy
             for g, r in zip(generated_texts, reference_texts):

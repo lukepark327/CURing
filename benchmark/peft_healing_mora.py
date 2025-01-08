@@ -39,7 +39,8 @@ from cur_models import CURLinear, rebuild_model_with_W
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-parser = argparse.ArgumentParser(description="Benchmarking CUR-Decomposed Models")
+parser = argparse.ArgumentParser(
+    description="Benchmarking CUR-Decomposed Models")
 
 parser.add_argument('--load_path', type=str, default=None,
                     help='Directory path from where the modified model is loaded.')
@@ -95,7 +96,8 @@ if not tokenizer.pad_token:
 
 # Teacher
 teacher_model_name = "meta-llama/Llama-3.1-8B"
-teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model_name).to(device)
+teacher_model = AutoModelForCausalLM.from_pretrained(
+    teacher_model_name).to(device)
 teacher_model.eval()
 for param in teacher_model.parameters():
     param.requires_grad = False  # Freeze teacher model parameters
@@ -129,7 +131,8 @@ model = rebuilt_model
 
 
 # TODO: argparse
-target_layers = [25, 26, 27, 24, 28, 23, 22, 29, 20, 21, 19, 18, 17, 30, 16, 11, 10, 13, 14, 15]
+target_layers = [25, 26, 27, 24, 28, 23, 22, 29,
+                 20, 21, 19, 18, 17, 30, 16, 11, 10, 13, 14, 15]
 
 target_modules_q = []
 target_modules_k = []

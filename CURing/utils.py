@@ -81,7 +81,7 @@ def calculate_model_size(model, exclude_zeros=True):
         int: Total size of the model weights in bits.
     """
     total_size_bits = 0
-    
+
     for name, param in model.named_parameters():
         # if "weight" in name:
         if exclude_zeros:
@@ -93,7 +93,7 @@ def calculate_model_size(model, exclude_zeros=True):
         dtype_size = param.element_size() * 8  # Size of each element in bits
         size_bits = count_elements * dtype_size
         total_size_bits += size_bits
-            
+
     for name, buffer in model.named_buffers():
         if exclude_zeros:
             non_zero_elements = (buffer != 0).sum().item()
@@ -104,7 +104,7 @@ def calculate_model_size(model, exclude_zeros=True):
         dtype_size = buffer.element_size() * 8  # Size of each element in bits
         size_bits = count_elements * dtype_size
         total_size_bits += size_bits
-            
+
     return total_size_bits
 
 
@@ -146,7 +146,7 @@ def calculate_per_layer_frobenius_norm_diff(model_1, model_2):
     """
     # Convert model_2 named parameters into a dictionary for easy access
     model_2_params = dict(model_2.named_parameters())
-    
+
     layer_norms_diff = {}
 
     for name, param1 in model_1.named_parameters():

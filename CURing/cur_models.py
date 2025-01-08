@@ -143,7 +143,8 @@ class WandaWrappedModule:
         activation = activation.to(self.device)
 
         if self.scaler_row is None:
-            self.scaler_row = torch.zeros(activation.size(1), device=self.device)
+            self.scaler_row = torch.zeros(
+                activation.size(1), device=self.device)
         self.scaler_row += activation.pow(2).sum(dim=0)  # L2 norm
 
         batch_size = activation.size(0)
@@ -238,9 +239,11 @@ def activate_capture_for_all_ActivationAccumulator(wrapped_modules):
     for wrapped_module in wrapped_modules.values():
         wrapped_module.activate_capture()
 
+
 def deactivate_capture_for_all_ActivationAccumulator(wrapped_modules):
     for wrapped_module in wrapped_modules.values():
         wrapped_module.deactivate_capture()
+
 
 def reset_activations_for_all_ActivationAccumulator(wrapped_modules):
     for wrapped_module in wrapped_modules.values():
