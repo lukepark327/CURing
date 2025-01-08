@@ -8,7 +8,7 @@ CURing Large Models: Compression via CUR Decomposition
 
 # Prerequirements
 
-## lm-evaluation-harness
+### lm-evaluation-harness
 
 ```bash
 git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness
@@ -17,7 +17,7 @@ cd lm-evaluation-harness
 pip install -e .
 ```
 
-## MoRA
+### MoRA
 
 ```bash
 git clone https://github.com/kongds/MoRA.git
@@ -32,6 +32,18 @@ Change project name to `peft_mora`:
 
 
 # Run
+
+### CURing Decomposition
+
+```bash
+$ curing.sh
+```
+
+### Healing
+
+```bash
+$ healing.sh
+```
 
 ### Tensorboard
 
