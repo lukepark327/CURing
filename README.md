@@ -2,6 +2,8 @@
 
 CURing Large Models: Compression via CUR Decomposition
 
+[[Paper]](https://arxiv.org/abs/2501.04211)
+
 
 ---
 
