@@ -54,9 +54,11 @@ $ tensorboard --logdir=runs --host 0.0.0.0 --port 6006 --samples_per_plugin scal
 http://localhost:6006/?darkMode=true#scalars
 
 
+<!--
 ---
 
 
 # Acknowledgement
 
 Our code is based on [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) and [MoRA](https://github.com/kongds/MoRA).
+-->
