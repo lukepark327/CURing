@@ -1,8 +1,6 @@
 # CURing
 
-CURing Large Models: Compression via CUR Decomposition
-
-[[Paper]](https://arxiv.org/abs/2501.04211)
+CURing Large Models: Compression via Activation-aware CUR Decomposition
 
 
 ---
