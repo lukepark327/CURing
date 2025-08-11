@@ -48,6 +48,8 @@ parser.add_argument('--batch_size', type=int, default=1,
                     help='Batch size for data loading.')
 parser.add_argument('--num_calibration_steps', type=int, default=128,
                     help='Number of calibration steps (number of batches to process).')
+parser.add_argument('--max_length', type=int, default=128,
+                    help='Max length per calibration dataset.')
 
 # CUR Decomposition Parameters
 parser.add_argument('--num_curing_layers', type=int, default=10,
@@ -106,12 +108,15 @@ batch_size = args.batch_size
 
 # Load the C4 dataset with streaming
 num_calibration_steps = args.num_calibration_steps
+max_length = args.max_length
+
 dataset = {
     'train': load_dataset(
         args.dataset,
         args.dataset_category,
         split='train',
-        streaming=True
+        streaming=True,
+        trust_remote_code=True
     ).take(num_calibration_steps),
 }
 
@@ -120,7 +125,7 @@ def tokenize_function(examples):
     return tokenizer(
         examples['text'],
         return_special_tokens_mask=True,
-        max_length=128,
+        max_length=max_length,
         truncation=True
     )
 

@@ -7,8 +7,9 @@ from datetime import datetime
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim import AdamW
 import torch.nn.functional as F
-from transformers import set_seed, get_cosine_schedule_with_warmup, AdamW, DataCollatorForLanguageModeling
+from transformers import set_seed, get_cosine_schedule_with_warmup, DataCollatorForLanguageModeling
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
@@ -75,6 +76,8 @@ parser.add_argument('--warmup_steps', type=int, default=100,
                     help='Number of warmup steps for the learning rate scheduler.')
 parser.add_argument('--learning_rate', type=float, default=3e-4,
                     help='Learning rate for the optimizer.')
+parser.add_argument('--max_length', type=int, default=128,
+                    help='Max length per calibration dataset.')
 
 # Validation Parameters
 parser.add_argument('--validation_interval', type=int, default=100,
@@ -112,7 +115,8 @@ set_seed(args.seed)
 
 
 # Set model name and paths
-teacher_model_name = "meta-llama/Llama-3.1-8B"
+teacher_model_name = args.teacher_model_name
+print(f"Teacher Model: {teacher_model_name}")
 # load_path
 if args.load_path:
     child_path = args.load_path
@@ -120,7 +124,7 @@ else:
     with open("./cur_decomposed_models/latest.txt", "r") as f:
         child_path = f.read().strip()
 load_path = f"./cur_decomposed_models/{child_path}"
-print(f"Loaded from {load_path}")
+print(f"Child Model: {args.load_path}, Loaded from {load_path}")
 # Create a timestamped directory to avoid overwriting
 save_path = args.save_path
 os.makedirs(save_path, exist_ok=True)
@@ -195,7 +199,7 @@ def tokenize_function_text(examples):
     return tokenizer(
         examples['text'],
         return_special_tokens_mask=True,
-        max_length=128,
+        max_length=args.max_length,
         truncation=True
     )
 
@@ -622,14 +626,17 @@ model.train()
 optimizer.zero_grad()
 global_step = 0  # Initialize a global step counter
 
+# TODO
+# TODO: lm_eval
 # Create a mapping of task types for each validation dataset
-validation_tasks = {
-    'c4': {'dataloader': validation_dataloaders['c4'], 'task_type': 'lm', 'eval_steps': min(args.num_validation_steps, 364608) // batch_size},
-    'wikitext': {'dataloader': validation_dataloaders['wikitext'], 'task_type': 'lm', 'eval_steps': min(args.num_validation_steps, 3760) // batch_size},
-    'boolq': {'task_type': 'classification', 'limit': min(args.num_validation_steps, 3270), 'fewshot': 0},
-    # 57 categiries
-    'mmlu': {'task_type': 'classification', 'limit': min(args.num_validation_steps, 32), 'fewshot': 5},
-}
+# validation_tasks = {
+#     'c4': {'dataloader': validation_dataloaders['c4'], 'task_type': 'lm', 'eval_steps': min(args.num_validation_steps, 364608) // batch_size},
+#     'wikitext': {'dataloader': validation_dataloaders['wikitext'], 'task_type': 'lm', 'eval_steps': min(args.num_validation_steps, 3760) // batch_size},
+#     'boolq': {'task_type': 'classification', 'limit': min(args.num_validation_steps, 3270), 'fewshot': 0},
+#     # 57 categiries
+#     'mmlu': {'task_type': 'classification', 'limit': min(args.num_validation_steps, 32), 'fewshot': 5},
+# }
+validation_tasks = {}
 
 for epoch in range(num_epochs):
     progress_bar = tqdm(enumerate(train_dataloader),
@@ -674,6 +681,11 @@ for epoch in range(num_epochs):
             student_hidden = outputs.hidden_states[i]
             teacher_hidden = teacher_outputs.hidden_states[i]
             mse_loss += mse_loss_fn(student_hidden, teacher_hidden)
+
+        del outputs.hidden_states
+        del teacher_outputs.hidden_states
+        torch.cuda.empty_cache()
+
         # Average MSE loss over layers
         mse_loss = mse_loss / (num_layers - 1)
 
@@ -729,6 +741,7 @@ for epoch in range(num_epochs):
 
             model.train()
 
+            # TODO: disabling backup - time eval
             if args.model_save:
                 # Save the fine-tuned model
                 # model.save_pretrained(save_path)
@@ -736,6 +749,9 @@ for epoch in range(num_epochs):
                 tokenizer.save_pretrained(save_path)
 
         global_step += 1  # Increment the global step counter
+
+    torch.cuda.empty_cache()
+
 
 # Close the TensorBoard writers
 for writer in writers.values():
