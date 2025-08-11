@@ -1,3 +1,11 @@
+cur_decomposed_models/
+cur_healed_models/
+runs/
+MoRA/
+lm-evaluation-harness/
+.python-version
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
