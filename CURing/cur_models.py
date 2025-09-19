@@ -1,10 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 # CURLinear
-
-
 class CURLinear(nn.Module):
     def __init__(self, C, U, R, bias=None, row_indices=None, col_indices=None):
         super(CURLinear, self).__init__()
@@ -27,12 +26,21 @@ class CURLinear(nn.Module):
         self.nsamples = 0
 
     def forward(self, x):
-        # y = ((x @ R.T) @ U.T) @ C.T
-        out_R = x.matmul(self.R.t())  # Shape: (batch_size, seq_length, rank)
-        # Shape: (batch_size, seq_length, rank)
-        out_U = out_R.matmul(self.U.t())
-        # Shape: (batch_size, seq_length, output_dim)
-        out_C = out_U.matmul(self.C.t())
+        # # y = ((x @ R.T) @ U.T) @ C.T
+        # out_R = x.matmul(self.R.t())  # Shape: (batch_size, seq_length, rank)
+        # # Shape: (batch_size, seq_length, rank)
+        # out_U = out_R.matmul(self.U.t())
+        # # Shape: (batch_size, seq_length, output_dim)
+        # out_C = out_U.matmul(self.C.t())
+        # if self.bias is not None:
+        #     out_C += self.bias
+
+        # out_R = x @ R^T
+        out_R = F.linear(x, self.R, bias=None)
+        # out_U = out_R @ U^T
+        out_U = F.linear(out_R, self.U, bias=None)
+        # out_C = out_U @ C^T + b
+        out_C = F.linear(out_U, self.C, bias=self.bias)
 
         if self.capture_activations:
             # Accumulate activation_R
@@ -58,8 +66,6 @@ class CURLinear(nn.Module):
                 0) * activation_R.size(1)  # batch_size * seq_length
             self.nsamples += total_positions
 
-        if self.bias is not None:
-            out_C += self.bias
         return out_C
 
     def reset_activations(self):
@@ -124,50 +130,195 @@ def rebuild_model_with_W(model):
 
 
 # WANDA
-
-
 class WandaWrappedModule:
-    def __init__(self, module, device='cuda'):
+    """
+    Collects sqrt(E[x^2]) per input feature, excluding PAD tokens via attention_mask.
+    Batch-size invariant by design (mean over valid tokens).
+    """
+
+    def __init__(self, module, acc_device='cuda', acc_dtype=torch.float64):
         self.module = module
-        self.scaler_row = None
-        self.nsamples = 0
-        self.device = device
+        self.acc_device = acc_device
+        self.acc_dtype = acc_dtype
+        # (d_in,), accumulated sum of squares over valid tokens
+        self.sum_sq = None
+        self.nsamples = 0           # # of valid token positions
+        # (B, T) attention_mask for the current forward
+        self.current_mask = None
+        self.handle = None
+
+    def set_current_mask(self, mask: torch.Tensor):
+        # mask: (B, T) with 1 for valid tokens
+        self.current_mask = mask
 
     def add_batch(self, module, inp, out):
-        # module # input # output
+        with torch.no_grad():
+            x = inp[0].detach()  # (B, T, d) or (N, d)
+            if x.dim() == 3:
+                B, T, D = x.shape
+                if self.current_mask is not None:
+                    m = self.current_mask.to(x.device).bool()
+                    # guard for any off-by-one in T
+                    if m.shape[1] != T:
+                        Tcommon = min(T, m.shape[1])
+                        x = x[:, :Tcommon, :]
+                        m = m[:, :Tcommon]
+                    x = x[m]  # (N_valid, D)
+                else:
+                    x = x.view(-1, D)
+            elif x.dim() == 2:
+                D = x.size(-1)
+                # no time dim; treat all as valid
+            else:
+                x = x.view(-1, x.size(-1))
 
-        activation = inp[0].detach()
-        # If batch
-        if activation.dim() > 2:
-            activation = activation.view(-1, activation.size(-1))
-        activation = activation.to(self.device)
+            if x.numel() == 0:
+                return
 
-        if self.scaler_row is None:
-            self.scaler_row = torch.zeros(
-                activation.size(1), device=self.device)
-        self.scaler_row += activation.pow(2).sum(dim=0)  # L2 norm
-
-        batch_size = activation.size(0)
-        self.nsamples += batch_size
+            # accumulate on cuda/double for numerical stability (batch-order invariant up to fp error)
+            xsq_sum = (x.to(self.acc_device, dtype=self.acc_dtype).pow(2)).sum(
+                dim=0)  # (D,)
+            if self.sum_sq is None:
+                self.sum_sq = torch.zeros_like(
+                    xsq_sum, device=self.acc_device, dtype=self.acc_dtype)
+            self.sum_sq += xsq_sum
+            self.nsamples += x.size(0)  # valid token count only
 
     def register_hook(self):
-        self.handle = self.module.register_forward_hook(self.add_batch)
+        if self.handle is None:
+            self.handle = self.module.register_forward_hook(self.add_batch)
 
     def remove_hook(self):
-        self.handle.remove()
+        if self.handle is not None:
+            self.handle.remove()
+            self.handle = None
 
     def get_activation_norm(self):
-        # L2 norm
-        activation_norm = torch.sqrt(
-            self.scaler_row / self.nsamples  # Average
-        )
-        return activation_norm
+        # sqrt(E[x^2]) over valid tokens
+        if self.sum_sq is None or self.nsamples == 0:
+            return None
+        # (d_in,), on acc_device
+        return torch.sqrt(self.sum_sq / float(self.nsamples))
+
+
+# Cov
+class CovWrappedModule:
+    """
+    Full second-moment / covariance collector (batch-size invariant).
+    Excludes PAD tokens using attention_mask; accumulates on acc_device/acc_dtype.
+    """
+
+    def __init__(self, module, acc_device='cuda', acc_dtype=torch.float64):
+        self.module = module
+        self.acc_device = acc_device
+        self.acc_dtype = acc_dtype
+        self.nsamples = 0
+        self.sum_x = None     # (d_in,)
+        self.sum_xxT = None   # (d_in, d_in)
+        self.current_mask = None
+        self.handle = None
+
+    def set_current_mask(self, mask: torch.Tensor):
+        self.current_mask = mask  # (B, T)
+
+    def add_batch(self, module, inp, out):
+        with torch.no_grad():
+            x = inp[0].detach()  # (B, T, d) or (N, d)
+            if x.dim() == 3:
+                B, T, D = x.shape
+                if self.current_mask is not None:
+                    m = self.current_mask.to(x.device).bool()
+                    if m.shape[1] != T:
+                        Tcommon = min(T, m.shape[1])
+                        x = x[:, :Tcommon, :]
+                        m = m[:, :Tcommon]
+                    x = x[m]  # (N_valid, D)
+                else:
+                    x = x.view(-1, D)
+            else:
+                # already (N, d)
+                pass
+
+            if x.numel() == 0:
+                return
+
+            x_acc = x.to(self.acc_device, dtype=self.acc_dtype)
+            d_in = x_acc.size(-1)
+            if self.sum_x is None:
+                self.sum_x = torch.zeros(
+                    d_in, dtype=self.acc_dtype, device=self.acc_device)
+                self.sum_xxT = torch.zeros(
+                    d_in, d_in, dtype=self.acc_dtype, device=self.acc_device)
+
+            self.sum_x += x_acc.sum(dim=0)
+            # mm on double; deterministic across batch segmentations up to fp64 precision
+            self.sum_xxT += x_acc.t().mm(x_acc)
+            self.nsamples += x_acc.size(0)
+
+    def register_hook(self):
+        if self.handle is None:
+            self.handle = self.module.register_forward_hook(self.add_batch)
+
+    def remove_hook(self):
+        if self.handle is not None:
+            self.handle.remove()
+            self.handle = None
+
+    def reset(self):
+        self.nsamples = 0
+        self.sum_x = None
+        self.sum_xxT = None
+
+    @torch.no_grad()
+    def get_input_second_moment(self, device=None, dtype=torch.float32):
+        if self.sum_xxT is None or self.nsamples == 0:
+            return None
+        dev = self.acc_device if device is None else device
+        return (self.sum_xxT / float(self.nsamples)).to(device=dev, dtype=dtype)
+
+    @torch.no_grad()
+    def get_input_covariance(self, unbiased: bool = False, device=None, dtype=torch.float32):
+        if self.sum_xxT is None or self.sum_x is None or self.nsamples <= 1:
+            return None
+        n = float(self.nsamples)
+        mu = (self.sum_x / n).unsqueeze(1)
+        ExxT = self.sum_xxT / n
+        cov = ExxT - mu @ mu.t()
+        if unbiased and self.nsamples > 1:
+            cov = cov * (n / (n - 1.0))
+        dev = self.acc_device if device is None else device
+        return cov.to(device=dev, dtype=dtype)
+
+    @torch.no_grad()
+    def get_input_cov_sqrt(self, eps: float = 1e-12, unbiased: bool = False,
+                           device=None, dtype=torch.float32):
+        cov = self.get_input_covariance(
+            unbiased=unbiased, device=self.acc_device, dtype=self.acc_dtype)
+        if cov is None:
+            return None
+        cov = 0.5 * (cov + cov.t())
+        d = cov.shape[0]
+        cov = cov + eps * torch.eye(d, dtype=cov.dtype, device=cov.device)
+        evals, evecs = torch.linalg.eigh(cov)
+        evals = torch.clamp(evals, min=0.0).sqrt()
+        out = (evecs * evals.unsqueeze(0)) @ evecs.t()
+        dev = self.acc_device if device is None else device
+        return out.to(device=dev, dtype=dtype)
+
+    @torch.no_grad()
+    def get_rms(self, eps: float = 1e-12, device=None, dtype=torch.float32):
+        ExxT = self.get_input_second_moment(
+            device=self.acc_device, dtype=self.acc_dtype)
+        if ExxT is None:
+            return None
+        diag = torch.diag(ExxT).clamp_min(eps)
+        out = torch.sqrt(diag)
+        dev = self.acc_device if device is None else device
+        return out.to(device=dev, dtype=dtype)
 
 
 # Activation
 # Hooks to collect activations (for interpretability)
-
-
 class ActivationAccumulator:
     def __init__(self, module):
         self.module = module

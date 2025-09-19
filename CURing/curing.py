@@ -18,7 +18,7 @@ import time
 import tracemalloc
 
 
-from cur_models import CURLinear, WandaWrappedModule, rebuild_model_with_W
+from cur_models import CURLinear, WandaWrappedModule, CovWrappedModule, rebuild_model_with_W
 from cur import apply_cur_to_matrix
 from utils import calculate_sparsity, calculate_model_size, calculate_per_layer_frobenius_norm, calculate_per_layer_frobenius_norm_diff, compute_block_distances, get_last_non_padded_tokens
 
@@ -46,16 +46,34 @@ parser.add_argument('--dataset_category', type=str, default="en",
                     help='Dataset category to use.')
 parser.add_argument('--batch_size', type=int, default=1,
                     help='Batch size for data loading.')
-parser.add_argument('--num_calibration_steps', type=int, default=128,
+parser.add_argument('--num_calibration_steps', type=int, default=256,
                     help='Number of calibration steps (number of batches to process).')
-parser.add_argument('--max_length', type=int, default=128,
+parser.add_argument('--max_length', type=int, default=4096,
                     help='Max length per calibration dataset.')
 
 # CUR Decomposition Parameters
 parser.add_argument('--num_curing_layers', type=int, default=10,
                     help='Number of layers to apply CUR decomposition to.')
-parser.add_argument('--max_rank', type=int, default=256,
+parser.add_argument('--max_rank', type=int,
+                    default=None,
                     help='Maximum rank for CUR decomposition.')
+parser.add_argument('--min_rank', type=int,
+                    default=None,
+                    help='Minimum rank for CUR decomposition.')
+parser.add_argument('--cur_metric', type=str,
+                    default='wanda',
+                    choices=['wanda', 'cov_fast', 'cov', 'weight'],
+                    help='CUR selection metric: wanda(|W|*RMS), cov_fast(W*sqrt(E[x^2])), cov(W*Cov^{1/2}).')
+parser.add_argument('--cur_mode', type=str,
+                    default='deim',
+                    choices=['deim', 'deim_full', 'magnitude', 'random'],
+                    help='Column/Row selection algorithm for CUR.')
+parser.add_argument('--energy', type=float,
+                    default=None,
+                    help='Retained energy ratio for rank selection (e.g., 0.98).')
+parser.add_argument('--cov_unbiased', action='store_true',
+                    default=False,
+                    help='Use unbiased covariance (n/(n-1)) when cur_metric=cov.')
 
 # Module Names to Process
 parser.add_argument('--ffn_module_names', nargs='*', default=["gate_proj"],
@@ -80,7 +98,7 @@ save_path = args.save_path
 os.makedirs(save_path, exist_ok=True)
 # Create a timestamped directory to avoid overwriting
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-child_path = f"C{args.num_calibration_steps}_N{args.num_curing_layers}_R{args.max_rank}_{timestamp}"
+child_path = f"{args.cur_metric}_{args.cur_mode}_B{args.batch_size}_C{args.num_calibration_steps}_N{args.num_curing_layers}_R{args.max_rank}_E{args.energy}_{timestamp}"
 with open(os.path.join(save_path, "latest.txt"), "w") as f:
     f.write(child_path)
 save_path = os.path.join(save_path, child_path)
@@ -107,7 +125,7 @@ model.to(device)
 batch_size = args.batch_size
 
 # Load the C4 dataset with streaming
-num_calibration_steps = args.num_calibration_steps
+data_amount = args.batch_size * args.num_calibration_steps
 max_length = args.max_length
 
 dataset = {
@@ -117,7 +135,7 @@ dataset = {
         split='train',
         streaming=True,
         trust_remote_code=True
-    ).take(num_calibration_steps),
+    ).take(data_amount),
 }
 
 
@@ -126,7 +144,8 @@ def tokenize_function(examples):
         examples['text'],
         return_special_tokens_mask=True,
         max_length=max_length,
-        truncation=True
+        truncation=True,
+        padding='max_length',
     )
 
 
@@ -147,6 +166,12 @@ calibration_dataloader = DataLoader(
     batch_size=batch_size,
     collate_fn=data_collator,
 )
+
+
+def set_current_mask_for_wrapped_modules(wrapped_modules, attention_mask):
+    for wm in wrapped_modules.values():
+        if hasattr(wm, 'set_current_mask'):
+            wm.set_current_mask(attention_mask)
 
 
 # main
@@ -179,14 +204,27 @@ attn_module_names = args.attn_module_names
 
 
 def register_hooks_for_layers(model, wrapped_modules):
-    # TODO: GQA
+    use_cov = (args.cur_metric == 'cov')
 
     for layer_index, layer in enumerate(model.model.layers):
         # Process FFN modules
         for name in ffn_module_names:
             if hasattr(layer.mlp, name):
                 module = getattr(layer.mlp, name)
-                wrapped_module = WandaWrappedModule(module)
+                if use_cov:
+                    wrapped_module = CovWrappedModule(
+                        module,
+                        acc_device=device,  # cuda
+                        acc_dtype=torch.float64,  # TODO
+                        # acc_dtype=torch.float32,
+                    )
+                else:
+                    wrapped_module = WandaWrappedModule(
+                        module,
+                        acc_device=device,  # cuda
+                        acc_dtype=torch.float64,  # TODO
+                        # acc_dtype=torch.float32,
+                    )
                 wrapped_module.register_hook()
                 key = f"layer_{layer_index}_mlp_{name}"
                 wrapped_modules[key] = wrapped_module
@@ -195,7 +233,20 @@ def register_hooks_for_layers(model, wrapped_modules):
         for name in attn_module_names:
             if hasattr(layer.self_attn, name):
                 module = getattr(layer.self_attn, name)
-                wrapped_module = WandaWrappedModule(module)
+                if use_cov:
+                    wrapped_module = CovWrappedModule(
+                        module,
+                        acc_device=device,  # cuda
+                        acc_dtype=torch.float64,  # TODO
+                        # acc_dtype=torch.float32,
+                    )
+                else:
+                    wrapped_module = WandaWrappedModule(
+                        module,
+                        acc_device=device,  # cuda
+                        acc_dtype=torch.float64,  # TODO
+                        # acc_dtype=torch.float32,
+                    )
                 wrapped_module.register_hook()
                 key = f"layer_{layer_index}_self_attn_{name}"
                 wrapped_modules[key] = wrapped_module
@@ -223,20 +274,25 @@ gpu_mem_start, gpu_max_start = get_gpu_usage()
 start_time = time.time()
 
 
-# Process WANDA
+# Process WANDA / cov_fast / cov
 # Pass data through the original model once to collect activations
 model.eval()
 with torch.no_grad():
     progress_bar = tqdm(
         enumerate(calibration_dataloader),
-        total=num_calibration_steps,
+        total=args.num_calibration_steps,
         desc=f"Calibration",
     )
     for step, batch in progress_bar:
-        if step >= num_calibration_steps:
+        if step >= args.num_calibration_steps:
             break
+
         inputs = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
+
+        # broadcast mask to all wrappers BEFORE forward
+        set_current_mask_for_wrapped_modules(wrapped_modules, attention_mask)
+
         outputs = model(
             inputs,
             attention_mask=attention_mask,
@@ -357,6 +413,7 @@ for wrapped_module in wrapped_modules.values():
 modified_model = copy.deepcopy(model)
 
 max_rank = args.max_rank
+min_rank = args.min_rank
 
 
 # Benchmark-2
@@ -370,6 +427,7 @@ start_time = time.time()
 # TODO: tqdm
 # TODO: parallel
 # Process (CURing) each layer using the collected activations
+rank_log_rows = []
 for layer_index in range(len(model.model.layers) - 1):
     # skip last layer
 
@@ -381,36 +439,103 @@ for layer_index in range(len(model.model.layers) - 1):
         for name in ffn_module_names:
             key = f"layer_{layer_index}_mlp_{name}"
             wrapped_module = wrapped_modules[key]
-            activation_norm = wrapped_module.get_activation_norm()
+
+            # 1) 보조통계(aux_info) 준비: cur_metric에 따라 분기
+            metric_mode_local = args.cur_metric
+            if args.cur_metric == 'wanda':
+                aux_info = wrapped_module.get_activation_norm()
+            elif args.cur_metric == 'cov_fast':
+                # 빠른 공분산(대각, sqrt(E[x^2])): WANDA의 RMS로 충분
+                if hasattr(wrapped_module, 'get_activation_norm'):
+                    aux_info = wrapped_module.get_activation_norm()
+                else:
+                    # (cov 래퍼만 있을 경우) 대각 근사 사용
+                    aux_info = wrapped_module.get_rms()
+            elif args.cur_metric == 'cov':
+                aux_info = wrapped_module.get_input_covariance(
+                    unbiased=args.cov_unbiased)
+                if aux_info is None:
+                    # 표본이 부족한 경우 등 → cov_fast로 폴백
+                    metric_mode_local = 'cov_fast'
+                    aux_info = (wrapped_module.get_rms()
+                                if hasattr(wrapped_module, 'get_rms')
+                                else wrapped_module.get_activation_norm())
+            else:
+                # raise ValueError(f"Unknown cur_metric: {args.cur_metric}")
+                aux_info = None
+
+            # 2) CUR 적용
             module = getattr(layer.mlp, name)
             weight = module.weight.data
-
-            # print(f"Processing layer {layer_index}, module '{name}':")
             C, U, R, rank, row_indices, col_indices = apply_cur_to_matrix(
-                weight, activation_norm, max_rank)
-            # Create CURLinear module
+                weight, aux_info, max_rank, min_rank,
+                aux_mode=metric_mode_local, cur_mode=args.cur_mode,
+                energy=args.energy
+            )
+
+            # Log
+            m, n = weight.shape
+            orig_rank = min(m, n)
+            reduction = orig_rank - rank
+            rank_log_rows.append([
+                key, f'{m}x{n}',
+                orig_rank, rank, reduction,
+                metric_mode_local
+            ])
+
+            # 3) CURLinear로 치환
             bias = module.bias.data.clone() if module.bias is not None else None
             cur_linear = CURLinear(C, U, R, bias, row_indices, col_indices)
-            # Replace the module in the modified model
             setattr(modified_layer.mlp, name, cur_linear)
 
         # Process Attention modules
         for name in attn_module_names:
             key = f"layer_{layer_index}_self_attn_{name}"
             wrapped_module = wrapped_modules[key]
-            activation_norm = wrapped_module.get_activation_norm()
+
+            # 1) 보조통계(aux_info) 준비: cur_metric에 따라 분기
+            metric_mode_local = args.cur_metric
+            if args.cur_metric == 'wanda':
+                aux_info = wrapped_module.get_activation_norm()
+            elif args.cur_metric == 'cov_fast':
+                if hasattr(wrapped_module, 'get_activation_norm'):
+                    aux_info = wrapped_module.get_activation_norm()
+                else:
+                    aux_info = wrapped_module.get_rms()
+            elif args.cur_metric == 'cov':
+                aux_info = wrapped_module.get_input_covariance(
+                    unbiased=args.cov_unbiased)
+                if aux_info is None:
+                    metric_mode_local = 'cov_fast'
+                    aux_info = (wrapped_module.get_rms()
+                                if hasattr(wrapped_module, 'get_rms')
+                                else wrapped_module.get_activation_norm())
+            else:
+                # raise ValueError(f"Unknown cur_metric: {args.cur_metric}")
+                aux_info = None
+
+            # 2) CUR 적용
             module = getattr(layer.self_attn, name)
             weight = module.weight.data
-
-            # print(f"Processing layer {layer_index}, module '{name}':")
-            # print(f"  Weight shape: {weight.shape}")
-            # print(f"  Activation norm shape: {activation_norm.shape}")
             C, U, R, rank, row_indices, col_indices = apply_cur_to_matrix(
-                weight, activation_norm, max_rank)
-            # Create CURLinear module
+                weight, aux_info, max_rank, min_rank,
+                aux_mode=metric_mode_local, cur_mode=args.cur_mode,
+                energy=args.energy
+            )
+
+            # Log
+            m, n = weight.shape
+            orig_rank = min(m, n)
+            reduction = orig_rank - rank
+            rank_log_rows.append([
+                key, f'{m}x{n}',
+                orig_rank, rank, reduction,
+                metric_mode_local
+            ])
+
+            # 3) CURLinear로 치환
             bias = module.bias.data.clone() if module.bias is not None else None
             cur_linear = CURLinear(C, U, R, bias, row_indices, col_indices)
-            # Replace the module in the modified model
             setattr(modified_layer.self_attn, name, cur_linear)
 
 
@@ -440,6 +565,23 @@ with open(metrics_csv_path, mode='w', newline='') as csv_file:
     writer = csv.writer(csv_file)
     writer.writerow(results.keys())
     writer.writerow(results.values())
+
+
+if rank_log_rows:
+    rank_csv_path = os.path.join(save_path, "cur_rank_reduction.csv")
+    with open(rank_csv_path, mode='w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            "key", "shape",
+            "orig_rank", "cur_rank", "rank_delta",
+            "metric_mode"
+        ])
+        print("\nRank:")
+        for row in rank_log_rows:
+            print(f"  {row[0]}\t({row[1]}): "
+                  f"  {row[2]} -> {row[3]}\t(Δ{row[4]}) "
+                  f"  metric={row[5]}")
+            writer.writerow(row)
 
 
 # Save the modified model
