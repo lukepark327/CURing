@@ -117,9 +117,7 @@ def select_rows_and_columns(
         col_indices = torch.randperm(n, device=W.device)[:k_cols].tolist()
         return row_indices, col_indices
 
-    #######
-    # AUX #
-    #######
+    # AUX
 
     if aux_mode == 'wanda':
         act = A.view(1, -1).to(W.device, dtype=W.dtype)
@@ -137,9 +135,7 @@ def select_rows_and_columns(
         D = _matrix_sqrt_psd(Sigma)
         S = W @ D
 
-    #######
-    # CUR #
-    #######
+    # CUR
 
     if cur_mode == 'deim':
         row_indices, col_indices = cur_deim_gpu(
@@ -321,8 +317,10 @@ def energy_rank(W: torch.Tensor,
 
     # Energy-based rank from singular values of M
     if use_lowrank:
-        q = min(max(256, int(min(m, n) * 0.25)),
-                min(m, n))  # TODO: max 25% or 256
+        q = min(
+            max(256, int(min(m, n) * 0.25)),  # TODO: max 25% or 256
+            min(m, n)
+        )
         _, sv, _ = torch.svd_lowrank(M.float(), q=q, niter=niter)
     else:
         # SLOW
@@ -345,11 +343,11 @@ def energy_rank(W: torch.Tensor,
             r = int(torch.searchsorted(cume, torch.tensor(
                 target, device=cume.device)).item()) + 1
 
-    # Round up to the nearest multiple of 32
+    # Round up to the nearest multiple of 128
     # This can improve hardware efficiency (e.g., tensor cores).
     # We round up to preserve at least the energy target.
     if r > 0:
-        r = ((r + 31) // 32) * 32
+        r = ((r + 127) // 128) * 128
 
     # Guards
     r = max(1, min(r, min(m, n)))
@@ -366,10 +364,10 @@ def calculate_rank(m, n):
         # This can happen if the term inside sqrt is negative, though unlikely with m,n > 0
         r = min(m, n)
 
-    # Round down to the nearest multiple of 32
+    # Round down to the nearest multiple of 128
     # We round down to stay below the parameter breakeven point.
     if r > 0:
-        r = (r // 32) * 32
+        r = (r // 128) * 128
 
     # Guards
     r = max(1, min(r, min(m, n)))
