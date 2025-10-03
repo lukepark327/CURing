@@ -14,6 +14,7 @@ from lm_eval import simple_evaluate
 
 # autopep8: on
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_DATASETS_TRUST_REMOTE_CODE"] = "true"
 
 
 parser = argparse.ArgumentParser(description="Test Models")
@@ -146,37 +147,42 @@ def evaluate_lm(model, task_name, limit=None):
             # Monitoring
             avg_ppl = math.exp(total_loss / max(1, n_tokens))
             step_ppl = math.exp(step_loss.item() / max(1, step_tokens))
+
+            stats = pbar.format_dict
+            elapsed = stats["elapsed"]
+            toks_per_s = n_tokens / elapsed if elapsed > 0 else 0.0
+
             pbar.set_postfix(
                 avg=f"{avg_ppl:.4f}",
                 step=f"{step_ppl:.4f}",
-                toks=f"{n_tokens/1e6:.4f}M"
+                toks=f"{n_tokens/1e6:.4f}M",
+                tps=f"{toks_per_s:,.0f}/s",
             )
 
     avg_nll = total_loss / n_tokens
     ppl = math.exp(avg_nll)
 
     model.config.use_cache = use_cache_flag
-    return {'loss': avg_nll, 'perplexity': ppl}
+    return {'loss': avg_nll, 'perplexity': ppl, 'tps': f"{toks_per_s:,.0f}/s"}
 
 
 def _pick_primary_metric_keys(res: dict):
     preferred = [
         "acc_norm,none", "acc_norm",
         "acc,none", "acc",
-        "exact_match_flexible_extract,none", "exact_match_flexible_extract",
-        "exact_match_strict_extract,none", "exact_match_strict_extract",
+        "exact_match,flexible-extract", "exact_match_flexible_extract",
+        "exact_match,strict-match", "exact_match_strict_extract",
         "exact_match,none", "exact_match",
     ]
     metric_key = next((k for k in preferred if k in res), None)
     if metric_key is None:
         metric_key = next(k for k in res.keys() if "stderr" not in k)
 
-    base = metric_key.split(",")[0]
+    base, option = metric_key.split(",")
 
     stderr_key_candidates = [
-        f"{base}_stderr,none",
+        f"{base}_stderr,{option}",
         f"{base}_stderr",
-        metric_key.replace(",none", "_stderr,none"),
         f"{metric_key}_stderr",
     ]
     stderr_key = next((k for k in stderr_key_candidates if k in res), None)
@@ -190,6 +196,7 @@ def evaluate_classification(model, task_name, limit=None, fewshot=0):
             pretrained=model,
             backend='causal',
             tokenizer=tokenizer,
+            trust_remote_code=True,
             # batch_size
         ),
         tasks=[task_name],
@@ -208,15 +215,30 @@ def evaluate_classification(model, task_name, limit=None, fewshot=0):
     metric_key, stderr_key = _pick_primary_metric_keys(res)
     accuracy = res[metric_key]
     stderr = res.get(stderr_key, None)
+
     return {'accuracy': accuracy, 'stderr': stderr}
 
 
 # Create a mapping of task types for each test dataset
 test_tasks = {
-    'gsm8k':            {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 8},
-    'hendrycks_math':   {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 4},
-    'bbh':              {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 3},
-    'gpqa':             {'task_type': 'classification', 'limit': int(args.num_test_steps / 4),  'fewshot': 0},
+    # QA
+    # 'social_iqa':    {'task_type': 'classification', 'limit': int(args.num_test_steps / 3), 'fewshot': 0},
+    # 'logiqa':        {'task_type': 'classification', 'limit': int(args.num_test_steps / 4), 'fewshot': 5},
+    # 'winogrande':    {'task_type': 'classification', 'limit': int(args.num_test_steps / 2), 'fewshot': 5},
+    # 'arc_easy':      {'task_type': 'classification', 'limit': int(args.num_test_steps / 4), 'fewshot': 25},
+    # 'arc_challenge': {'task_type': 'classification', 'limit': int(args.num_test_steps / 4), 'fewshot': 25},
+    # 'piqa':          {'task_type': 'classification', 'limit': int(args.num_test_steps / 2), 'fewshot': 0},
+    # 'openbookqa':    {'task_type': 'classification', 'limit': int(args.num_test_steps / 4), 'fewshot': 0},
+
+    # Hard
+    # 'gsm8k':            {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 8},
+    # 'hendrycks_math':   {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 4},
+
+    # Slow
+    # 'bbh':              {'task_type': 'classification', 'limit': int(args.num_test_steps),      'fewshot': 3},
+    # 'gpqa':             {'task_type': 'classification', 'limit': int(args.num_test_steps / 4),  'fewshot': 0},
+
+    # Normal
     'mmlu':             {'task_type': 'classification', 'limit': int(args.num_test_steps / 4),  'fewshot': 5},
     'boolq':            {'task_type': 'classification', 'limit': int(args.num_test_steps / 2),  'fewshot': 0},
     'wikitext':         {'task_type': 'lm',             'limit': args.num_test_steps, },
@@ -235,8 +257,9 @@ for task_name, task_info in test_tasks.items():
         )
         val_loss = eval_result['loss']
         perplexity = eval_result['perplexity']
+        tps = eval_result['tps']
         results.append(
-            f"{task_name},\tLoss: {val_loss},\tPerplexity: {perplexity}"
+            f"{task_name},\tLoss: {val_loss},\tPerplexity: {perplexity},\tTPS: {tps}"
         )
 
     elif task_info['task_type'] == 'classification':
