@@ -448,22 +448,20 @@ for layer_index in range(len(model.model.layers) - 1):
             key = f"layer_{layer_index}_mlp_{name}"
             wrapped_module = wrapped_modules[key]
 
-            # 1) 보조통계(aux_info) 준비: cur_metric에 따라 분기
+            # 1) AUX
             metric_mode_local = args.cur_metric
             if args.cur_metric == 'wanda':
                 aux_info = wrapped_module.get_activation_norm()
             elif args.cur_metric == 'cov_fast':
-                # 빠른 공분산(대각, sqrt(E[x^2])): WANDA의 RMS로 충분
                 if hasattr(wrapped_module, 'get_activation_norm'):
                     aux_info = wrapped_module.get_activation_norm()
                 else:
-                    # (cov 래퍼만 있을 경우) 대각 근사 사용
                     aux_info = wrapped_module.get_rms()
             elif args.cur_metric == 'cov':
                 aux_info = wrapped_module.get_input_covariance(
                     unbiased=args.cov_unbiased)
                 if aux_info is None:
-                    # 표본이 부족한 경우 등 → cov_fast로 폴백
+                    # Fallback
                     metric_mode_local = 'cov_fast'
                     aux_info = (wrapped_module.get_rms()
                                 if hasattr(wrapped_module, 'get_rms')
@@ -472,7 +470,7 @@ for layer_index in range(len(model.model.layers) - 1):
                 # raise ValueError(f"Unknown cur_metric: {args.cur_metric}")
                 aux_info = None
 
-            # 2) CUR 적용
+            # 2) CUR
             module = getattr(layer.mlp, name)
             weight = module.weight.data
             C, U, R, rank, row_indices, col_indices = apply_cur_to_matrix(
@@ -491,7 +489,7 @@ for layer_index in range(len(model.model.layers) - 1):
                 metric_mode_local
             ])
 
-            # 3) CURLinear로 치환
+            # 3) CURLinear
             bias = module.bias.data.clone() if module.bias is not None else None
             cur_linear = CURLinear(C, U, R, bias, row_indices, col_indices)
             setattr(modified_layer.mlp, name, cur_linear)
@@ -501,7 +499,7 @@ for layer_index in range(len(model.model.layers) - 1):
             key = f"layer_{layer_index}_self_attn_{name}"
             wrapped_module = wrapped_modules[key]
 
-            # 1) 보조통계(aux_info) 준비: cur_metric에 따라 분기
+            # 1) AUX
             metric_mode_local = args.cur_metric
             if args.cur_metric == 'wanda':
                 aux_info = wrapped_module.get_activation_norm()
@@ -522,7 +520,7 @@ for layer_index in range(len(model.model.layers) - 1):
                 # raise ValueError(f"Unknown cur_metric: {args.cur_metric}")
                 aux_info = None
 
-            # 2) CUR 적용
+            # 2) CUR
             module = getattr(layer.self_attn, name)
             weight = module.weight.data
             C, U, R, rank, row_indices, col_indices = apply_cur_to_matrix(
@@ -541,7 +539,7 @@ for layer_index in range(len(model.model.layers) - 1):
                 metric_mode_local
             ])
 
-            # 3) CURLinear로 치환
+            # 3) CURLinear
             bias = module.bias.data.clone() if module.bias is not None else None
             cur_linear = CURLinear(C, U, R, bias, row_indices, col_indices)
             setattr(modified_layer.self_attn, name, cur_linear)

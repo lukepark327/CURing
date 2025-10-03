@@ -22,24 +22,10 @@ def cur_deim_gpu(W: torch.Tensor,
                  use_lowrank: bool = True,
                  oversample: int = 20,
                  niter: int = 2) -> tuple[list[int], list[int]]:
-    """
-    DEIM-CUR 선택 알고리즘 (GPU friendly)
 
-    Args:
-        W  : (m, n) weight or importance matrix (GPU/CPU 모두 가능)
-        r  : target rank  (r << min(m, n))
-        use_lowrank : True → torch.linalg.svd_lowrank (권장)
-                      False → thin-SVD (full_matrices=False)
-        oversample   : low-rank SVD 시 여유차원 (q = r + oversample)
-        niter        : randomized SVD power iteration 횟수
-
-    Returns:
-        irow, icol : 선택된 row / col 인덱스를 Python 리스트로 반환
-    """
-
-    # --- ① SVD (thin or low-rank) ------------------------------------------
+    # --- SVD (thin or low-rank) ---
     if use_lowrank:
-        # randomized / block Lanczos SVD (GPU 지원)
+        # randomized / block Lanczos SVD (GPU support)
         # print(f"DEIM-CUR: SVD lowrank ({W.device})")
         qmax = min(W.shape[0], W.shape[1])
         q = min(r + oversample, qmax)
@@ -51,7 +37,7 @@ def cur_deim_gpu(W: torch.Tensor,
         U, S, Vh = LA.svd(W, full_matrices=False)
         U, V = U[:, :r], Vh.T[:, :r]
 
-    # --- ② DEIM 선택 (GPU 텐서 연산, no .item(), no CPU sync) --------------
+    # --- DEIM Selection ---
     m, n = W.shape
     irow = torch.empty(r, dtype=torch.long, device=W.device)
     icol = torch.empty(r, dtype=torch.long, device=W.device)
@@ -59,7 +45,6 @@ def cur_deim_gpu(W: torch.Tensor,
     mask_c = torch.zeros(n, dtype=torch.bool, device=W.device)
 
     for k in range(r):
-        # 가장 큰 절대값(중복 제외)
         u_vec = torch.where(mask_r, torch.zeros_like(U[:, k]), U[:, k].abs())
         v_vec = torch.where(mask_c, torch.zeros_like(V[:, k]), V[:, k].abs())
         row_k = torch.argmax(u_vec)
@@ -70,7 +55,6 @@ def cur_deim_gpu(W: torch.Tensor,
         mask_r[row_k] = True
         mask_c[col_k] = True
 
-        # --- ③ rank-1 업데이트 (폐쇄형) : pinverse(1×k) = vec / ||vec||² -------
         if k + 1 < r:
             alpha_r = U[row_k, :k+1]            # (k+1,)
             alpha_c = V[col_k, :k+1]            # (k+1,)
@@ -88,22 +72,6 @@ def select_rows_and_columns(
     aux_mode: str = 'wanda',
     cur_mode: str = 'deim',
 ):
-    """
-    Select rows and columns from matrix W based on WANDA metrics computed using activation norms.
-
-    - W: weight matrix of shape [out_features, in_features]
-    - A:
-        * 'wanda'    : tensor of shape [in_features]          (sqrt(E[x^2]))
-        * 'cov_fast' : tensor of shape [in_features]          (sqrt(E[x^2]))
-        * 'cov'      : tensor of shape [in_features, in_features] (Cov[x])
-    - aux_mode: 'wanda' | 'cov_fast' | 'cov'
-
-    Selection is performed on:
-        'wanda'    → S = |W| * act
-        'cov_fast' → M = W * scale
-        'cov'      → M = W @ Cov^{1/2}
-    """
-
     # if num_cols != num_rows:
     #     raise ValueError("Not a square matrix.")
     m, n = W.shape
@@ -154,7 +122,6 @@ def select_rows_and_columns(
     elif cur_mode == 'magnitude':
         # Magnitude (Prob) with stability guards
 
-        # S는 위 metric_mode 분기에서 이미 정의됨
         frobenius_norm = torch.norm(S, p='fro')
         col_norms = torch.norm(S, p=2, dim=0)  # (n,)
         row_norms = torch.norm(S, p=2, dim=1)  # (m,)
@@ -197,10 +164,6 @@ def select_rows_and_columns(
 
 
 def cur_decomposition(W, A, num_rows, num_cols, aux_mode: str = 'wanda', cur_mode: str = 'deim', use_float64: bool = True):
-    """
-    Perform CUR decomposition on matrix W using WANDA metrics.
-    """
-
     orig_dtype = W.dtype
     if use_float64 and orig_dtype != torch.float64:
         W = W.to(torch.float64)
@@ -276,14 +239,6 @@ def energy_rank(W: torch.Tensor,
                 energy: float = 0.98,
                 use_lowrank: bool = True,
                 niter: int = 2) -> int:
-    """
-    Decide rank based on retained energy ratio on M (or S).
-
-    aux_mode:
-      - 'wanda'    : S = |W| * act, act: (n,) ≈ sqrt(E[x^2])
-      - 'cov_fast' : M = W * scale,   scale: (n,) = sqrt(E[x^2])  (sign-preserving)
-      - 'cov'      : M = W @ Cov^{1/2}, Cov: (n,n)
-    """
     m, n = W.shape
 
     # Build selection/weighted matrix
