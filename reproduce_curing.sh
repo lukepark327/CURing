@@ -36,7 +36,7 @@ while read -r MODEL ENERGY MIN_RANK; do
   mkdir -p "${SAVE_PATH}"
 
   echo "=== Model: ${MODEL} | energy=${ENERGY} | min_rank=${MIN_RANK}"
-#   for N in $(seq 1 20); do
+#   for N in $(seq 20 -1 1); do
 #   for N in $(seq 1 2 19); do
   for N in $(seq 2 2 20); do
     echo "==> num_curing_layers=${N}"
@@ -59,8 +59,8 @@ while read -r MODEL ENERGY MIN_RANK; do
       --seed 42 \
       --model_save
 
-    LATEST=$(tr -d '[:space:]' < "${SAVE_PATH}/latest.txt")
-    LOAD_PATH="${SAVE_PATH}/${LATEST}/"
+    LATEST=$(cat "${SAVE_PATH}/latest.txt")
+    LOAD_PATH="${SAVE_PATH}/${LATEST}"
     echo "Load path: ${LOAD_PATH}"
 
     CUDA_VISIBLE_DEVICES=${DEVICE} python benchmark/curing_model.py \
