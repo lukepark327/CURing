@@ -60,8 +60,12 @@ parser.add_argument('--max_rank', type=int,
 parser.add_argument('--min_rank', type=int,
                     default=None,
                     help='Minimum rank for CUR decomposition.')
+parser.add_argument('--layer_metric', type=str,
+                    default='angular',
+                    choices=['angular', 'last', 'random'],
+                    help='Layer selection metric: angular, last, random.')
 parser.add_argument('--cur_metric', type=str,
-                    default='wanda',
+                    default='cov_fast',
                     choices=['wanda', 'cov_fast', 'cov', 'weight'],
                     help='CUR selection metric: wanda(|W|*RMS), cov_fast(W*sqrt(E[x^2])), cov(W*Cov^{1/2}).')
 parser.add_argument('--cur_mode', type=str,
@@ -353,29 +357,33 @@ with open(metrics_csv_path, mode='w', newline='') as csv_file:
     writer.writerow(results.values())
 
 
-# ========================
-
-########
-# TEST #
-########
-
-
+# Layer Selection
 # Separate into two lists
 
-# Angular Distance
-sorted_indices_to_cur = ([pair[0] for pair in distances_sorted])[
-    :num_CURing_layer]
-sorted_distances = ([pair[1] for pair in distances_sorted])[:num_CURing_layer]
 
-# # Last layers
-# sorted_indices_to_cur = list(range(30, 0, -1)[:num_CURing_layer])
-# sorted_distances = [0.0 for _ in range(len(sorted_indices_to_cur))]
+if args.layer_metric == 'angular':
+    # Angular Distance
+    sorted_indices_to_cur = ([pair[0] for pair in distances_sorted])[
+        :num_CURing_layer]
+    sorted_distances = ([pair[1] for pair in distances_sorted])[
+        :num_CURing_layer]
+elif args.layer_metric == 'last':
+    # Last layers
+    # TODO
+    sorted_indices_to_cur = list(range(30, 0, -1)[:num_CURing_layer])  # 32 - 2  # noqa: F401
+    # sorted_indices_to_cur = list(range(38, 0, -1)[:num_CURing_layer])  # 40 - 2  # Llama2-13B  # noqa: F401
+    # sorted_indices_to_cur = list(range(34, 0, -1)[:num_CURing_layer])  # 36 - 2  # Qwen3-8B  # noqa: F401
+    sorted_distances = [0.0 for _ in range(len(sorted_indices_to_cur))]
+elif args.layer_metric == 'random':
+    # Random layers
+    # TODO
+    sorted_indices_to_cur = random.sample(range(1, 31), num_CURing_layer)  # 32  # noqa: F401
+    # sorted_indices_to_cur = random.sample(range(1, 39), num_CURing_layer)  # 40  # Llama2-13B  # noqa: F401
+    # sorted_indices_to_cur = random.sample(range(1, 35), num_CURing_layer)  # 36  # Qwen3-8B  # noqa: F401
+    sorted_distances = [0.0 for _ in range(len(sorted_indices_to_cur))]
 
-# # Random layers
-# sorted_indices_to_cur = random.sample(range(1, 31), num_CURing_layer)
-# sorted_distances = [0.0 for _ in range(len(sorted_indices_to_cur))]
-
-# ========================
+else:
+    raise ValueError(f"Invalid {args.layer_metric}.")
 
 
 # Output results
@@ -626,7 +634,7 @@ gc.collect()
 torch.cuda.empty_cache()
 
 # Print per-layer Frobenius norms
-print("\nPer-layer Frobenius norms:")
+# print("\nPer-layer Frobenius norms:")
 norms_csv_path = os.path.join(save_path, "per_layer_frobenius_norms.csv")
 with open(norms_csv_path, mode='w', newline='') as csv_file:
     writer = csv.writer(csv_file)
@@ -636,47 +644,47 @@ with open(norms_csv_path, mode='w', newline='') as csv_file:
         original_norm = original_per_layer_norms.get(layer_name, 0.0)
         cur_norm = cur_per_layer_norms.get(layer_name, 0.0)
         norm_difference = frob_norm_diff.get(layer_name, 0.0)
-        print(f"{layer_name}:")
-        print(f"  Original Frobenius norm: {original_norm}")
-        print(f"  CUR-decomposed Frobenius norm: {cur_norm}")
-        print(f"  Difference: {norm_difference}")
+        # print(f"{layer_name}:")
+        # print(f"  Original Frobenius norm: {original_norm}")
+        # print(f"  CUR-decomposed Frobenius norm: {cur_norm}")
+        # print(f"  Difference: {norm_difference}")
         writer.writerow([layer_name, original_norm, cur_norm, norm_difference])
 
-# Print total model sparsity
-print(f"\nSparsity:")
-print(f"  Original model sparsity: {original_sparsity}")
-print(f"  CUR-decomposed model sparsity: {cur_model_sparsity}")
-print(f"  Rebuilt CUR model sparsity: {cur_rebuilt_model_sparsity}")
-sparsity_csv_path = os.path.join(save_path, "model_sparsity.csv")
-with open(sparsity_csv_path, mode='w', newline='') as csv_file:
-    writer = csv.writer(csv_file)
-    writer.writerow(["Model_Version", "Sparsity"])
-    writer.writerow(["Original", original_sparsity])
-    writer.writerow(["CUR_Decomposed", cur_model_sparsity])
-    writer.writerow(["Rebuilt", cur_rebuilt_model_sparsity])
+# # Print total model sparsity
+# print(f"\nSparsity:")
+# print(f"  Original model sparsity: {original_sparsity}")
+# print(f"  CUR-decomposed model sparsity: {cur_model_sparsity}")
+# print(f"  Rebuilt CUR model sparsity: {cur_rebuilt_model_sparsity}")
+# sparsity_csv_path = os.path.join(save_path, "model_sparsity.csv")
+# with open(sparsity_csv_path, mode='w', newline='') as csv_file:
+#     writer = csv.writer(csv_file)
+#     writer.writerow(["Model_Version", "Sparsity"])
+#     writer.writerow(["Original", original_sparsity])
+#     writer.writerow(["CUR_Decomposed", cur_model_sparsity])
+#     writer.writerow(["Rebuilt", cur_rebuilt_model_sparsity])
 
-# Print total model sizes
-print(f"\nTotal model size (excluding zeros):")
-print(
-    f"  Original model size: {original_model_size_bits_zero / (8 * 1024 ** 2):.2f} MB")
-print(
-    f"  CUR-decomposed model size: {cur_model_size_bits_zero / (8 * 1024 ** 2):.2f} MB")
-print(
-    f"  Size difference (nonzero): {size_difference_bits_nonzero / (8 * 1024 ** 2):.2f} MB")
-print(
-    f"  Size difference (zero): {size_difference_bits_zero / (8 * 1024 ** 2):.2f} MB")
-model_size_csv_path = os.path.join(save_path, "model_sizes.csv")
-with open(model_size_csv_path, mode='w', newline='') as csv_file:
-    writer = csv.writer(csv_file)
-    writer.writerow(["Model_Version", "Size_MB"])
-    writer.writerow(
-        ["Original", original_model_size_bits_zero / (8 * 1024 ** 2)])
-    writer.writerow(
-        ["CUR_Decomposed", cur_model_size_bits_zero / (8 * 1024 ** 2)])
-    writer.writerow(["Size_Difference_Nonzero",
-                    size_difference_bits_nonzero / (8 * 1024 ** 2)])
-    writer.writerow(
-        ["Size_Difference_Zero", size_difference_bits_zero / (8 * 1024 ** 2)])
+# # Print total model sizes
+# print(f"\nTotal model size (excluding zeros):")
+# print(
+#     f"  Original model size: {original_model_size_bits_zero / (8 * 1024 ** 2):.2f} MB")
+# print(
+#     f"  CUR-decomposed model size: {cur_model_size_bits_zero / (8 * 1024 ** 2):.2f} MB")
+# print(
+#     f"  Size difference (nonzero): {size_difference_bits_nonzero / (8 * 1024 ** 2):.2f} MB")
+# print(
+#     f"  Size difference (zero): {size_difference_bits_zero / (8 * 1024 ** 2):.2f} MB")
+# model_size_csv_path = os.path.join(save_path, "model_sizes.csv")
+# with open(model_size_csv_path, mode='w', newline='') as csv_file:
+#     writer = csv.writer(csv_file)
+#     writer.writerow(["Model_Version", "Size_MB"])
+#     writer.writerow(
+#         ["Original", original_model_size_bits_zero / (8 * 1024 ** 2)])
+#     writer.writerow(
+#         ["CUR_Decomposed", cur_model_size_bits_zero / (8 * 1024 ** 2)])
+#     writer.writerow(["Size_Difference_Nonzero",
+#                     size_difference_bits_nonzero / (8 * 1024 ** 2)])
+#     writer.writerow(
+#         ["Size_Difference_Zero", size_difference_bits_zero / (8 * 1024 ** 2)])
 
 
 # # Sample output
