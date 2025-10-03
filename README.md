@@ -1,7 +1,6 @@
 # CURing
 
-CURing Large Models: Compression via Activation-aware CUR Decomposition
-
+Compressing Models using Activation-aware CUR Decomposition.
 
 ---
 
@@ -17,6 +16,7 @@ cd lm-evaluation-harness
 pip install -e .
 ```
 
+<!-- 
 ### MoRA
 
 ```bash
@@ -28,30 +28,44 @@ pip install -e ./peft-mora
 
 Change project name to `peft_mora`:
 - In `pyproject.toml`, update `known-first-party = ["peft_mora"]`.
-- In `setup.py`, update `name="peft_mora",`.
+- In `setup.py`, update `name="peft_mora",`. -->
+
+### Install Requirements
+
+```bash
+pip install -r requirements.txt
+```
 
 
 # Run
 
-### CURing Decomposition
 
 ```bash
-$ curing.sh
+# Benchmarking original models
+reproduce_original.sh
+
+# Benchmarking CURing-decomposited models
+reproduce_curing.sh
+
+# Ablation analysis
+reproduce_ablation.sh
 ```
 
+<!-- 
 ### Healing
 
 ```bash
 $ healing.sh
-```
+``` -->
 
+<!-- 
 ### Tensorboard
 
 ```bash
 $ tensorboard --logdir=runs --host 0.0.0.0 --port 6006 --samples_per_plugin scalars=1000000
 ```
 
-http://localhost:6006/?darkMode=true#scalars
+http://localhost:6006/?darkMode=true#scalars -->
 
 
 <!--
